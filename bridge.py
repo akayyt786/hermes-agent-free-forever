@@ -678,8 +678,8 @@ def anthropic_build_prompt(system, messages: list, tools: list = None, persona: 
     # 2. Claude Code's own system prompt (truncated — it can be 50k+ chars)
     sys_text = _extract_system(system)
     if sys_text:
-        if len(sys_text) > 500:
-            sys_text = sys_text[:500] + "\n[... truncated ...]"
+        if len(sys_text) > 15000:
+            sys_text = sys_text[:15000] + "\n[... truncated ...]"
         parts.append(f"[System]\n{sys_text}")
 
     # 3. Tool instructions (if tools are provided)
