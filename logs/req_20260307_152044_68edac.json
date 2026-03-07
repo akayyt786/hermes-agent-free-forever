@@ -1,7 +1,0 @@
-{
-  "timestamp": "20260307_152044",
-  "endpoint": "/v1/messages:response",
-  "prompt_length": 0,
-  "prompt_preview": "",
-  "response_summary": "I need the PR number you'd like to review. Please choose one from the list:\n\n- #34: Feature: Add temperature monitoring to system metrics\n- #33: Fix: Correct log rotation path configuration  \n- #32: Refactor: Move to async/await pattern throughout\n\nJust reply with the number (e.g., \"34\") and I'll fe"
-}

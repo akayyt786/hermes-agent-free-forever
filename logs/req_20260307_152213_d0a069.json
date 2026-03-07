@@ -1,7 +1,0 @@
-{
-  "timestamp": "20260307_152213",
-  "endpoint": "/v1/messages:response",
-  "prompt_length": 0,
-  "prompt_preview": "",
-  "response_summary": "Please provide the PR number you'd like me to review. You mentioned \"34, 33, 32\" \u2014 just reply with the number (e.g., `34`) and I'll fetch the details and diff for a thorough review."
-}

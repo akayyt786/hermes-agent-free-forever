@@ -1,7 +1,0 @@
-{
-  "timestamp": "20260307_151949",
-  "endpoint": "/v1/messages:response",
-  "prompt_length": 0,
-  "prompt_preview": "",
-  "response_summary": "Hello! I'm here to assist you with building, modifying, and debugging software projects. To get started, could you please provide more details about what you'd like to accomplish?\n\nFor example:\n- Are you starting a new project? If so, what type (web app, CLI tool, library, etc.) and which language/f"
-}
