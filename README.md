@@ -42,11 +42,21 @@ Use Claude Code as a full autonomous coding agent (like Cursor) backed by your c
    pip install -r requirements.txt
    ```
 
-3. **Fill in `.env`:**
-   ```env
-   DEEPSEEK_AUTH_TOKEN=your_token_here
-   MAX_CONTEXT_CHARS=100000
-   ```
+3. **Get your Auth Token:**
+   - Go to [chat.deepseek.com](https://chat.deepseek.com/) and log in.
+   - Open your browser's **Developer Tools** (Right-click -> Inspect -> Console).
+   - Paste the following command and press Enter:
+     ```javascript
+     console.log(JSON.parse(localStorage.getItem('user_token')).value)
+     ```
+   - Copy the long string that appears (it starts with `eyJ...`).
+
+4. **Fill in `.env`:**
+   - Paste your token into the `.env` file:
+     ```env
+     DEEPSEEK_AUTH_TOKEN="your_token_pasted_here"
+     MAX_CONTEXT_CHARS=100000
+     ```
 
 4. **Run the bridge:**
    ```bash
