@@ -1,0 +1,7 @@
+{
+  "timestamp": "20260307_153255",
+  "endpoint": "/v1/messages:response",
+  "prompt_length": 0,
+  "prompt_preview": "",
+  "response_summary": "I need more context to help you. What would you like to test? For example:\n- Are you looking to run existing tests?\n- Do you want to create new test files?\n- Is there a specific feature or module you want to test?\n\nPlease provide details about your project (e.g., programming language, framework, cur"
+}

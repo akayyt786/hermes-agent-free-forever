@@ -1,111 +1,73 @@
 """
 DeepSeek Proof of Work Challenge Implementation
 Author: @xtekky
-Date: 2024
-
-This module implements a proof-of-work challenge solver using WebAssembly (WASM)
-for Custom sha3 hashing. It provides functionality to solve computational challenges
-required for authentication or rate limiting purposes.
+Modified for stability on macOS by utilizing Node.js for the WASM execution.
 """
 
 import json
 import base64
-import wasmtime
-import numpy as np
-from typing import Dict, Any
+import subprocess
 import os
-
-WASM_PATH = f'{os.path.dirname(__file__)}/wasm/sha3_wasm_bg.7b9ca65ddd.wasm'
-
-class DeepSeekHash:
-    def __init__(self):
-        self.instance = None
-        self.memory   = None
-        self.store    = None
-        
-    def init(self, wasm_path: str):
-        engine = wasmtime.Engine()
-        
-        with open(wasm_path, 'rb') as f:
-            wasm_bytes = f.read()
-            
-        module = wasmtime.Module(engine, wasm_bytes)
-        
-        self.store = wasmtime.Store(engine)
-        linker     = wasmtime.Linker(engine)
-        linker.define_wasi()
-        
-        self.instance = linker.instantiate(self.store, module)
-        self.memory   = self.instance.exports(self.store)["memory"]
-        
-        return self
-    
-    def _write_to_memory(self, text: str) -> tuple[int, int]:
-        encoded = text.encode('utf-8')
-        length  = len(encoded)
-        ptr     = self.instance.exports(self.store)["__wbindgen_export_0"](self.store, length, 1)
-        
-        memory_view = self.memory.data_ptr(self.store)
-        for i, byte in enumerate(encoded):
-            memory_view[ptr + i] = byte
-            
-        return ptr, length
-    
-    def calculate_hash(self, algorithm: str, challenge: str, salt: str, 
-                      difficulty: int, expire_at: int) -> float:
-        
-        prefix = f"{salt}_{expire_at}_"  
-        retptr = self.instance.exports(self.store)["__wbindgen_add_to_stack_pointer"](self.store, -16)
-        
-        try:
-            challenge_ptr, challenge_len = self._write_to_memory(challenge)
-            prefix_ptr, prefix_len       = self._write_to_memory(prefix)
-            
-            self.instance.exports(self.store)["wasm_solve"](
-                self.store,
-                retptr, 
-                challenge_ptr, 
-                challenge_len, 
-                prefix_ptr, 
-                prefix_len, 
-                float(difficulty)
-            )
-            
-            memory_view = self.memory.data_ptr(self.store)
-            status      = int.from_bytes(bytes(memory_view[retptr:retptr + 4]), byteorder='little', signed=True)
-            
-            if status == 0:
-                return None
-            
-            value_bytes = bytes(memory_view[retptr + 8:retptr + 16])
-            value       = np.frombuffer(value_bytes, dtype=np.float64)[0]
-            
-            return int(value)
-            
-        finally:
-            self.instance.exports(self.store)["__wbindgen_add_to_stack_pointer"](self.store, 16)
+import sys
+from typing import Dict, Any
 
 class DeepSeekPOW:
     def __init__(self):
-        self.hasher = DeepSeekHash().init(WASM_PATH)
-    
+        # Check if node is available
+        try:
+            subprocess.run(["node", "-v"], capture_output=True, check=True)
+            self.node_available = True
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            self.node_available = False
+            print("\033[91mError: Node.js is required for PoW solving on this platform but was not found.\033[0m", file=sys.stderr)
+
     def solve_challenge(self, config: Dict[str, Any]) -> str:
         """Solves a proof-of-work challenge and returns the encoded response"""
-        answer = self.hasher.calculate_hash(
-            config['algorithm'],
-            config['challenge'],
-            config['salt'],
-            config['difficulty'],
-            config['expire_at']
-        )
+        if not self.node_available:
+            raise RuntimeError("Node.js not found. Cannot solve PoW challenge.")
+
+        # Path to the node solver bridge
+        script_path = os.path.join(os.path.dirname(__file__), 'pow_solver.js')
         
-        result = {
+        # Format the parameters for the node script
+        params = {
             'algorithm': config['algorithm'],
             'challenge': config['challenge'],
             'salt': config['salt'],
-            'answer': answer,
-            'signature': config['signature'],
-            'target_path': config['target_path']
+            'difficulty': config.get('difficulty') or config.get('target') or 0,
+            'expire_at': config['expire_at'],
+            'target_path': config.get('target_path', '/api/v0/chat/completion')
         }
-        
-        return base64.b64encode(json.dumps(result).encode()).decode()
+
+        try:
+            # Call the node solver
+            result = subprocess.run(
+                ["node", script_path, json.dumps(params)],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            
+            output = json.loads(result.stdout)
+            answer = output.get('answer')
+            
+            if answer is None:
+                print("\033[93mWarning: PoW solver returned no answer.\033[0m", file=sys.stderr)
+
+            # Build the result dict for encoding
+            res_dict = {
+                'algorithm': config['algorithm'],
+                'challenge': config['challenge'],
+                'salt': config['salt'],
+                'answer': answer,
+                'signature': config['signature'],
+                'target_path': params['target_path']
+            }
+            
+            return base64.b64encode(json.dumps(res_dict).encode()).decode()
+
+        except Exception as e:
+            print(f"\033[91mError: Node.js PoW solver failed: {e}\033[0m", file=sys.stderr)
+            if hasattr(e, 'stderr') and e.stderr:
+                print(f"Stderr: {e.stderr}", file=sys.stderr)
+            raise RuntimeError(f"PoW solving failed: {e}")

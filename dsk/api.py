@@ -1,8 +1,8 @@
-from curl_cffi import requests
+from curl_cffi import requests # Keep it to satisfy imports if needed, but we will use requests
+import requests
 from typing import Optional, Dict, Any, Generator, Literal
 import json
 from .pow import DeepSeekPOW
-import pkg_resources
 import sys
 from pathlib import Path
 import subprocess
@@ -44,15 +44,6 @@ class DeepSeekAPI:
         if not auth_token or not isinstance(auth_token, str):
             raise AuthenticationError("Invalid auth token provided")
 
-        try:
-            curl_cffi_version = pkg_resources.get_distribution('curl-cffi').version
-            if curl_cffi_version != '0.8.1b9':
-                print("\033[93mWarning: DeepSeek API requires curl-cffi version 0.8.1b9", file=sys.stderr)
-                print("Please install the correct version using: pip install curl-cffi==0.8.1b9\033[0m", file=sys.stderr)
-        except pkg_resources.DistributionNotFound:
-            print("\033[93mWarning: curl-cffi not found. Please install version 0.8.1b9:", file=sys.stderr)
-            print("pip install curl-cffi==0.8.1b9\033[0m", file=sys.stderr)
-
         self.auth_token = auth_token
         self.pow_solver = DeepSeekPOW()
 
@@ -62,8 +53,7 @@ class DeepSeekAPI:
             with open(cookies_path, 'r') as f:
                 cookie_data = json.load(f)
                 self.cookies = cookie_data.get('cookies', {})
-        except (FileNotFoundError, json.JSONDecodeError) as e:
-            print(f"\033[93mWarning: Could not load cookies from {cookies_path}: {e}\033[0m", file=sys.stderr)
+        except (FileNotFoundError, json.JSONDecodeError):
             self.cookies = {}
 
     def _get_headers(self, pow_response: Optional[str] = None) -> Dict[str, str]:
@@ -120,14 +110,13 @@ class DeepSeekAPI:
                     challenge = self._get_pow_challenge()
                     pow_response = self.pow_solver.solve_challenge(challenge)
                     headers = self._get_headers(pow_response)
-
+                
                 response = requests.request(
                     method=method,
                     url=url,
                     headers=headers,
                     json=json_data,
                     cookies=self.cookies,
-                    impersonate='chrome120',
                     timeout=None
                 )
 
@@ -232,7 +221,6 @@ class DeepSeekAPI:
                 headers=headers,
                 json=json_data,
                 cookies=self.cookies,  # Add cookies
-                impersonate='chrome120',
                 stream=True,
                 timeout=None
             )
@@ -246,41 +234,68 @@ class DeepSeekAPI:
                 else:
                     raise APIError(f"API request failed: {error_text}", response.status_code)
 
+            current_path = None
             for chunk in response.iter_lines():
+                if b'"request_message_id":' in chunk:
+                    try:
+                        d = json.loads(chunk[6:]) if chunk.startswith(b'data: ') else json.loads(chunk)
+                        msg_id = d.get('request_message_id') or d.get('response_message_id')
+                        if msg_id:
+                            yield {'message_id': str(msg_id), 'type': 'message_id'}
+                    except Exception:
+                        pass
+                        
                 try:
-                    parsed = self._parse_chunk(chunk)
-                    if parsed:
-                        yield parsed
-                        if parsed.get('finish_reason') == 'stop':
-                            break
+                    result = self._parse_chunk(chunk, current_path)
+                    if result:
+                        if result.get('_path'):
+                            current_path = result.pop('_path')
+                        else:
+                            result.pop('_path', None)
+                        if result.get('content'):
+                            yield result
                 except Exception as e:
                     raise APIError(f"Error parsing response chunk: {str(e)}")
 
         except requests.exceptions.RequestException as e:
             raise NetworkError(f"Network error occurred during streaming: {str(e)}")
 
-    def _parse_chunk(self, chunk: bytes) -> Optional[Dict[str, Any]]:
-        """Parse a SSE chunk from the API response"""
+    def _parse_chunk(self, chunk: bytes, current_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Parse a SSE chunk from the new DeepSeek JSON patch stream format."""
         if not chunk:
             return None
-
         try:
-            if chunk.startswith(b'data: '):
-                data = json.loads(chunk[6:])
+            if not chunk.startswith(b'data: '):
+                return None
 
-                if 'choices' in data and data['choices']:
-                    choice = data['choices'][0]
-                    if 'delta' in choice:
-                        delta = choice['delta']
+            data = json.loads(chunk[6:])
 
-                        return {
-                            'content': delta.get('content', ''),
-                            'type': delta.get('type', ''),
-                            'finish_reason': choice.get('finish_reason')
-                        }
+            # Determine the active path (sticky: inherited from previous chunk if not set)
+            path = data.get('p', current_path)
+
+            # Only handle string value tokens
+            value = data.get('v')
+            if not isinstance(value, str):
+                return None
+
+            if path == 'response/content':
+                return {'content': value, 'type': 'text', '_path': path}
+            elif path == 'response/thinking_content':
+                return {'content': value, 'type': 'thinking', '_path': path}
+
         except json.JSONDecodeError:
-            raise APIError("Invalid JSON in response chunk")
-        except Exception as e:
-            raise APIError(f"Error parsing chunk: {str(e)}")
+            pass
+
+        # Try to extract message_id from the raw dict if it's there
+        if isinstance(data, dict):
+            try:
+                if 'v' in data and isinstance(data['v'], dict) and 'response' in data['v']:
+                    msg_id = data['v']['response'].get('id')
+                    if msg_id:
+                        return {'message_id': msg_id, 'type': 'message_id'}
+                elif 'response_message_id' in data:
+                    return {'message_id': data['response_message_id'], 'type': 'message_id'}
+            except Exception:
+                pass
 
         return None
