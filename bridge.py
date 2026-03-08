@@ -65,7 +65,7 @@ BRIDGE_PORT        = int(os.getenv("BRIDGE_PORT", 8000))
 BRIDGE_HOST        = os.getenv("BRIDGE_HOST", "0.0.0.0")
 MAX_RETRIES        = int(os.getenv("MAX_RETRIES", "3"))
 SESSION_POOL_SIZE  = int(os.getenv("SESSION_POOL_SIZE", "3"))
-MAX_CONTEXT_CHARS  = int(os.getenv("MAX_CONTEXT_CHARS", "100000000000000000000000000000000000"))
+MAX_CONTEXT_CHARS  = int(os.getenv("MAX_CONTEXT_CHARS", "30000"))
 LOG_REQUESTS       = os.getenv("LOG_REQUESTS", "true").lower() == "true"
 
 # ─── Personas & Profiles ──────────────────────────────────────────────────────
@@ -669,38 +669,98 @@ def _extract_system(system) -> str:
 
 
 def anthropic_build_prompt(system, messages: list, tools: list = None, persona: str = "default") -> str:
-    """Build the full prompt for DeepSeek from Anthropic-format request."""
+    """Build the full prompt for DeepSeek from Anthropic-format request.
+    
+    DeepSeek's free chat API silently fails on prompts > ~30k chars.
+    We must intelligently compress while preserving the user's actual intent.
+    
+    Budget allocation (for 30k limit):
+    - Bridge system prompt: ~2k (always full)
+    - Claude's system prompt: ~5k (truncated)
+    - Tool names: ~3k (names only, no descriptions)
+    - User's latest message: ~10k (NEVER truncate)
+    - Conversation history: ~10k (remaining budget)
+    """
+    PROMPT_BUDGET = MAX_CONTEXT_CHARS
+    
     parts = []
 
-    # 1. Professional system prompt (always injected)
-    parts.append(f"[System]\n{get_system_prompt(persona)}")
+    # 1. Bridge's own system prompt (~2k) — always full
+    bridge_sys = get_system_prompt(persona)
+    parts.append(f"[System]\n{bridge_sys}")
+    used = len(bridge_sys) + 20
 
-    # 2. Claude Code's own system prompt (truncated — it can be 50k+ chars)
+    # 2. Claude Code's system prompt — can be 30-50k+, truncate to ~5k
+    CLAUDE_SYS_BUDGET = 5000
     sys_text = _extract_system(system)
     if sys_text:
-        # Unlimited instruction mode: no truncation for system prompts
+        if len(sys_text) > CLAUDE_SYS_BUDGET:
+            sys_text = sys_text[:CLAUDE_SYS_BUDGET] + "\n[... Claude system prompt truncated for DeepSeek API limits ...]"
         parts.append(f"[System]\n{sys_text}")
+        used += len(sys_text) + 20
 
-    # 3. Tool instructions (if tools are provided)
-    tool_instructions = _build_tool_instructions(tools) if tools else ""
-    if tool_instructions:
-        parts.append(tool_instructions)
+    # 3. Tool instructions — can be 40-60k+, keep only tool NAMES (~3k)
+    TOOL_BUDGET = 3000
+    if tools:
+        tool_names = [t.get("name", "unknown") for t in tools]
+        tool_summary = "[TOOL INSTRUCTIONS]\nYou have these tools available (use <tool_call> XML format):\n"
+        tool_summary += ", ".join(tool_names)
+        tool_summary += "\n\nTo call a tool, use:\n<tool_call>\n{\"name\": \"TOOL_NAME\", \"id\": \"call_UNIQUE\", \"input\": {PARAMS}}\n</tool_call>\n[END TOOL INSTRUCTIONS]"
+        if len(tool_summary) > TOOL_BUDGET:
+            tool_summary = tool_summary[:TOOL_BUDGET]
+        parts.append(tool_summary)
+        used += len(tool_summary) + 20
 
-    # 4. Conversation messages
-    for m in messages:
+    # 4. User's LATEST message — HIGHEST priority, never truncate
+    latest_user_msg = ""
+    remaining_messages = messages
+    if messages:
+        last_msg = messages[-1]
+        if last_msg.get("role") == "user":
+            latest_user_msg = _extract_text(last_msg.get("content", ""))
+            remaining_messages = messages[:-1]
+            used += len(latest_user_msg) + 20
+
+    # 5. Conversation history — fill remaining budget
+    history_budget = max(PROMPT_BUDGET - used - 500, 2000)  # At least 2k for history
+    history_parts = []
+    history_used = 0
+    
+    # Process messages in REVERSE order (newest first) to prioritize recent context
+    for m in reversed(remaining_messages):
         role = m.get("role", "user")
         content = _extract_text(m.get("content", ""))
-        if role == "user":
-            parts.append(f"[User]\n{content}")
-        elif role == "assistant":
-            parts.append(f"[Assistant]\n{content}")
-        else:
-            parts.append(f"[{role}]\n{content}")
+        
+        # Skip empty messages
+        if not content.strip():
+            continue
+            
+        entry = f"[{role.capitalize()}]\n{content}"
+        
+        if history_used + len(entry) > history_budget:
+            # Truncate this message to fit remaining budget
+            remaining = history_budget - history_used - 100
+            if remaining > 200:
+                entry = f"[{role.capitalize()}]\n{content[:remaining]}\n[... truncated ...]"
+                history_parts.insert(0, entry)
+            break
+        
+        history_parts.insert(0, entry)  # Insert at front to maintain order
+        history_used += len(entry)
+
+    # Assemble final prompt
+    for hp in history_parts:
+        parts.append(hp)
+    
+    if latest_user_msg:
+        parts.append(f"[User]\n{latest_user_msg}")
 
     prompt = "\n\n".join(parts)
-
-    # 5. Smart context compression
-    prompt = smart_context_compress(prompt)
+    
+    log.info(f"[Prompt] Built: {len(prompt)} chars (budget: {PROMPT_BUDGET}, "
+             f"sys: {len(bridge_sys)}, claude_sys: {len(sys_text) if sys_text else 0}, "
+             f"tools: {len(tools) if tools else 0}, history: {len(history_parts)} msgs, "
+             f"user_msg: {len(latest_user_msg)})")
 
     return prompt
 
