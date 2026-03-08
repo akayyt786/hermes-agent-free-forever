@@ -1027,7 +1027,11 @@ async def anthropic_messages(request: Request):
     last_error = None
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            if not is_continuation:
+            # FIX: Ensure api/chat_id are ALWAYs fresh or correctly assigned for each attempt
+            if is_continuation:
+                # Even for continuations, we need to ensure the api object is initialized
+                api = session_mgr._get_api()
+            else:
                 api, chat_id = await session_mgr.get_session()
 
             # Collect full response (needed for tool call parsing)
@@ -1057,6 +1061,17 @@ async def anthropic_messages(request: Request):
 
             full_text = "".join(all_text)
             full_think = "".join(all_think)
+
+            # FALLBACK LOGIC: If a continuation session returned NOTHING, it's likely stale.
+            # We force it to retry as a FRESH session on the next attempt.
+            if is_continuation and not full_text and not full_think:
+                log.warning(f"[Fallback] Continuation {chat_id[:8]} returned empty! Forcing fresh session for retry...")
+                is_continuation = False
+                ds_prompt = prompt # Send the full prompt this time
+                parent_msg_id = None
+                if history_hash in _session_history_map:
+                    del _session_history_map[history_hash]
+                raise APIError("Empty continuation response, triggering fallback.")
             
             # --- MULTI-AGENT REVIEW LOOP ---
             if auto_review and "<tool_call>" in full_text:
