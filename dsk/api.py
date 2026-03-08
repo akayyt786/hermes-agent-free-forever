@@ -254,7 +254,14 @@ class DeepSeekAPI:
                             result.pop('_path', None)
                         if result.get('content'):
                             yield result
+                    elif chunk.strip():
+                        # Unparsed but non-empty chunk — log for deep analysis
+                        if b'"p":' in chunk: # It's a data chunk but we skipped it
+                             pass
+                        else:
+                             print(f"\033[94m[Deep Analysis] Unparsed chunk: {chunk[:100]}...\033[0m", file=sys.stderr)
                 except Exception as e:
+                    print(f"\033[91m[Deep Analysis] Error parsing chunk: {e}\nRaw chunk: {chunk[:200]}\033[0m", file=sys.stderr)
                     raise APIError(f"Error parsing response chunk: {str(e)}")
 
         except requests.exceptions.RequestException as e:
