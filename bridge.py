@@ -65,7 +65,7 @@ BRIDGE_PORT        = int(os.getenv("BRIDGE_PORT", 8000))
 BRIDGE_HOST        = os.getenv("BRIDGE_HOST", "0.0.0.0")
 MAX_RETRIES        = int(os.getenv("MAX_RETRIES", "3"))
 SESSION_POOL_SIZE  = int(os.getenv("SESSION_POOL_SIZE", "3"))
-MAX_CONTEXT_CHARS  = int(os.getenv("MAX_CONTEXT_CHARS", "30000"))
+MAX_CONTEXT_CHARS  = int(os.getenv("MAX_CONTEXT_CHARS", "10000000"))
 LOG_REQUESTS       = os.getenv("LOG_REQUESTS", "true").lower() == "true"
 
 # ─── Personas & Profiles ──────────────────────────────────────────────────────
@@ -678,8 +678,7 @@ def anthropic_build_prompt(system, messages: list, tools: list = None, persona: 
     # 2. Claude Code's own system prompt (truncated — it can be 50k+ chars)
     sys_text = _extract_system(system)
     if sys_text:
-        if len(sys_text) > 15000:
-            sys_text = sys_text[:15000] + "\n[... truncated ...]"
+        # Unlimited instruction mode: no truncation for system prompts
         parts.append(f"[System]\n{sys_text}")
 
     # 3. Tool instructions (if tools are provided)
@@ -955,24 +954,8 @@ async def anthropic_messages(request: Request):
     tools = body.get("tools", None)
     max_tokens = body.get("max_tokens", 8192)
 
-    # Aggressively limit tools to prevent memory kill — keep only name+description
-    if tools:
-        slim_tools = []
-        for t in tools:
-            slim_tools.append({
-                "name": t.get("name", ""),
-                "description": (t.get("description", "")[:80]),
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        k: {"type": v.get("type", "string"), "description": v.get("description", "")[:60]}
-                        for k, v in t.get("input_schema", {}).get("properties", {}).items()
-                    },
-                    "required": t.get("input_schema", {}).get("required", [])
-                }
-            })
-        tools = slim_tools
-        log.info(f"[Anthropic] Slimmed {len(tools)} tools")
+    # Unlimited Mode: Pass full tool definitions without slimming
+        log.info(f"[Anthropic] Processing {len(tools)} full tools")
 
     # Parse persona and behavior commands from the last message
     persona = "default"
