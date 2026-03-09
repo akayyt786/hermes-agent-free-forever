@@ -317,34 +317,33 @@ def smart_context_compress(prompt: str, max_chars: int = MAX_CONTEXT_CHARS) -> s
     # Calculate budget
     remaining = max_chars - len(system_text)
 
-    if len(turns) <= 4:
+    if len(turns) <= 10:
         # Few enough turns — just truncate each if needed
         compressed_turns = [truncate_message(t, remaining // max(len(turns), 1)) for t in turns]
     else:
-        # Keep last 3 turns intact (or truncated), compress older ones
-        recent_turns = turns[-3:]
-        older_turns = turns[:-3]
+        # Keep last 10 turns intact (or truncated), compress older ones
+        recent_turns = turns[-10:]
+        older_turns = turns[:-10]
 
-        recent_budget = int(remaining * 0.7)  # 70% budget for recent context
+        recent_budget = int(remaining * 0.8)  # 80% budget for recent context
         older_budget = remaining - recent_budget
 
-        # Compress older turns to summaries
+        # Compress older turns
         compressed_older = []
-        per_old = max(older_budget // max(len(older_turns), 1), 200)
+        per_old = max(older_budget // max(len(older_turns), 1), 500)
         for t in older_turns:
             if len(t) > per_old:
-                compressed_older.append(t[:per_old] + "\n[... condensed ...]\n")
+                compressed_older.append(t[:per_old] + "\n[... truncated ...] ")
             else:
                 compressed_older.append(t)
 
-        # Keep recent turns, but truncate if individually too long
-        compressed_recent = [truncate_message(t, recent_budget // 3) for t in recent_turns]
+        # Keep recent turns
+        compressed_recent = [truncate_message(t, recent_budget // 10) for t in recent_turns]
 
         compressed_turns = compressed_older + compressed_recent
 
     result = system_text + "\n\n" + "\n\n".join(compressed_turns)
-    log.info(f"[Context] Compressed: {len(prompt)} → {len(result)} chars "
-             f"({len(prompt) - len(result)} removed)")
+    log.info(f"[Context] Compressed: {len(prompt)} → {len(result)} chars")
     return result
 
 # ─── App ──────────────────────────────────────────────────────────────────────
@@ -449,6 +448,9 @@ def build_prompt(msgs: list, tools: list = None, persona: str = "default") -> st
             parts.append(f"[System]\n{content_str}")
         else:
             parts.append(f"[{role}]\n{content_str}")
+
+    if tools:
+        parts.append("\n\nCRITICAL: Use the tools above (via <tool_call> XML) to perform the requested changes. Do not just describe them. Perform modifications immediately.")
 
     prompt = "\n\n".join(parts)
     return smart_context_compress(prompt)
@@ -674,12 +676,12 @@ def anthropic_build_prompt(system, messages: list, tools: list = None, persona: 
     DeepSeek's free chat API silently fails on prompts > ~30k chars.
     We must intelligently compress while preserving the user's actual intent.
     
-    Budget allocation (for 30k limit):
-    - Bridge system prompt: ~2k (always full)
-    - Claude's system prompt: ~5k (truncated)
-    - Tool names: ~3k (names only, no descriptions)
-    - User's latest message: ~10k (NEVER truncate)
-    - Conversation history: ~10k (remaining budget)
+    Budget allocation (Full Potential Mode):
+    - Bridge system prompt: Always full
+    - Claude's system prompt: Priority (up to 100k)
+    - Tool definitions: Priority (up to 100k)
+    - User's latest message: NEVER truncate
+    - Conversation history: Uses all remaining budget (up to MAX_CONTEXT_CHARS)
     """
     PROMPT_BUDGET = MAX_CONTEXT_CHARS
     
@@ -690,8 +692,8 @@ def anthropic_build_prompt(system, messages: list, tools: list = None, persona: 
     parts.append(f"[System]\n{bridge_sys}")
     used = len(bridge_sys) + 20
 
-    # 2. Claude Code's system prompt — can be 30-50k+, truncate to ~5k
-    CLAUDE_SYS_BUDGET = 5000
+    # 2. Claude Code's system prompt — Priority focus (up to 100k)
+    CLAUDE_SYS_BUDGET = 100000
     sys_text = _extract_system(system)
     if sys_text:
         if len(sys_text) > CLAUDE_SYS_BUDGET:
@@ -699,17 +701,14 @@ def anthropic_build_prompt(system, messages: list, tools: list = None, persona: 
         parts.append(f"[System]\n{sys_text}")
         used += len(sys_text) + 20
 
-    # 3. Tool instructions — can be 40-60k+, keep only tool NAMES (~3k)
-    TOOL_BUDGET = 3000
+    # 3. Tool instructions — Priority focus (up to 100k)
+    TOOL_BUDGET = 100000
     if tools:
-        tool_names = [t.get("name", "unknown") for t in tools]
-        tool_summary = "[TOOL INSTRUCTIONS]\nYou have these tools available (use <tool_call> XML format):\n"
-        tool_summary += ", ".join(tool_names)
-        tool_summary += "\n\nTo call a tool, use:\n<tool_call>\n{\"name\": \"TOOL_NAME\", \"id\": \"call_UNIQUE\", \"input\": {PARAMS}}\n</tool_call>\n[END TOOL INSTRUCTIONS]"
-        if len(tool_summary) > TOOL_BUDGET:
-            tool_summary = tool_summary[:TOOL_BUDGET]
-        parts.append(tool_summary)
-        used += len(tool_summary) + 20
+        tool_instructions = _build_tool_instructions(tools)
+        if len(tool_instructions) > TOOL_BUDGET:
+            tool_instructions = tool_instructions[:TOOL_BUDGET] + "\n[... Tool instructions truncated ...]"
+        parts.append(tool_instructions)
+        used += len(tool_instructions) + 20
 
     # 4. User's LATEST message — HIGHEST priority, never truncate
     latest_user_msg = ""
@@ -755,12 +754,17 @@ def anthropic_build_prompt(system, messages: list, tools: list = None, persona: 
     if latest_user_msg:
         parts.append(f"[User]\n{latest_user_msg}")
 
+    # 6. STICKY REMINDER - Repeat tool instructions at the absolute end to force use
+    if tools:
+        reminder = "\n\nCRITICAL: Use the tools above (via <tool_call> XML) to perform the requested changes. Do not just describe them. If the user asks for a file modification, use Write or Edit tools immediately."
+        parts.append(reminder)
+
     prompt = "\n\n".join(parts)
     
     log.info(f"[Prompt] Built: {len(prompt)} chars (budget: {PROMPT_BUDGET}, "
              f"sys: {len(bridge_sys)}, claude_sys: {len(sys_text) if sys_text else 0}, "
              f"tools: {len(tools) if tools else 0}, history: {len(history_parts)} msgs, "
-             f"user_msg: {len(latest_user_msg)})")
+             f"user_msg: {len(latest_user_msg)} + REMINDER)")
 
     return prompt
 

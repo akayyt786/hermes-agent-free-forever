@@ -23,11 +23,8 @@ share/python-wheels/
 MANIFEST
 
 # Environments
-.env
-.venv
-env/
-venv/
-ENV/
+# .env (removed from ignore per user request)
+# venv/ (removed from ignore per user request)
 
 # Logs
 *.log
