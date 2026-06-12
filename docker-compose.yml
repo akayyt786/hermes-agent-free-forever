@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  gateway:
+    build: .
+    ports:
+      - "${BRIDGE_PORT:-8000}:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DEEPSEEK_AUTH_TOKEN=${DEEPSEEK_AUTH_TOKEN}
+    volumes:
+      - ./app/infra/chroma_db:/app/app/infra/chroma_db
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  # Optional: ChromaDB standalone if needed, but we use persistent local client

@@ -23,8 +23,9 @@ share/python-wheels/
 MANIFEST
 
 # Environments
-# .env (removed from ignore per user request)
-# venv/ (removed from ignore per user request)
+.env
+venv/
+venv_gateway/
 
 # Logs
 *.log
@@ -36,3 +37,5 @@ final_check.json
 ngrok_url.txt
 bridge_v5_final.log
 dsk/cookies.json
+app/infra/chroma_db/
+*.sqlite3
