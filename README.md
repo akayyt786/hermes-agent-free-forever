@@ -30,7 +30,29 @@ Use Claude Code as a full autonomous coding agent (like Cursor) backed by your c
 
 ## Setup
 
-1. **Copy files** into your bridge directory:
+### 🚀 Quick Start (Automated)
+
+Simply run the launcher script for your platform. It will automatically:
+1. Kill any stale processes on port 8000.
+2. Create and activate a Python virtual environment (`venv`).
+3. Install/update all required dependencies.
+4. Set up your `.env` configuration and prompt you for your DeepSeek token if missing.
+5. Start the DeepSeek Bridge in the background.
+6. Connect and launch Claude Code in your terminal.
+
+#### macOS & Linux:
+```bash
+./start_claude.sh
+```
+
+#### Windows:
+```cmd
+start_claude.bat
+```
+
+---
+
+### 🛠️ Manual Setup
    ```
    bridge.py
    profiles.json
